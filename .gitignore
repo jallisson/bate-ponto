@@ -1,0 +1,8 @@
+venv/
+*.log
+*.json
+*.png
+*.html
+__pycache__/
+.wdm/
+debug.py
