@@ -1,6 +1,7 @@
 import schedule
 import time
 import datetime
+import random
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -11,22 +12,33 @@ from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException
 import logging
 from webdriver_manager.chrome import ChromeDriverManager
+from dotenv import load_dotenv
 import json
 import os
 
+# Carregar variáveis do arquivo .env
+load_dotenv()
+
 # ============================================
-# CONFIGURAÇÕES
+# CONFIGURAÇÕES (carregadas do .env)
 # ============================================
-usuario = '2965'
-senha = '1234'
+usuario = os.getenv('USUARIO')
+senha = os.getenv('SENHA')
+URL_BASE = os.getenv('URL_BASE', 'https://centraldofuncionario.com.br/50911')
+LATITUDE = float(os.getenv('LATITUDE', -5.5292))
+LONGITUDE = float(os.getenv('LONGITUDE', -47.4916))
+TEMPO_ALMOCO_MINUTOS = int(os.getenv('TEMPO_ALMOCO_MINUTOS', 60))
+CARGA_HORARIA_DIARIA = int(os.getenv('CARGA_HORARIA_DIARIA', 8))
 
-LATITUDE = -5.5292
-LONGITUDE = -47.4916
+# Variação aleatória em minutos (para parecer mais humano)
+VARIACAO_ENTRADA = int(os.getenv('VARIACAO_ENTRADA', 10))        # 0-10 min
+VARIACAO_SAIDA_ALMOCO = int(os.getenv('VARIACAO_SAIDA_ALMOCO', 5))  # 0-5 min
+VARIACAO_RETORNO = int(os.getenv('VARIACAO_RETORNO', 10))        # 0-10 min
+VARIACAO_SAIDA = int(os.getenv('VARIACAO_SAIDA', 10))            # 0-10 min
 
-TEMPO_ALMOCO_MINUTOS = 60
-CARGA_HORARIA_DIARIA = 8  # horas
-
-URL_BASE = 'https://centraldofuncionario.com.br/50911'
+# Validar credenciais
+if not usuario or not senha:
+    raise ValueError("ERRO: Configure USUARIO e SENHA no arquivo .env")
 # ============================================
 
 logging.basicConfig(
@@ -39,6 +51,7 @@ logging.basicConfig(
 )
 
 REGISTROS_FILE = "registros_ponto.json"
+DELAY_FILE = "delay_hoje.json"
 
 def main():
     logging.info('Programa iniciado')
@@ -70,6 +83,38 @@ def main():
         registros[hoje].append({"hora": hora_atual, "tipo": hora_tipo})
         with open(REGISTROS_FILE, 'w') as f:
             json.dump(registros, f, indent=2)
+
+    def obter_delay_do_dia(tipo_ponto):
+        """
+        Gera ou recupera o delay aleatório do dia para cada tipo de ponto.
+        O delay é fixo por dia para evitar que mude a cada verificação.
+        """
+        hoje = datetime.date.today().strftime('%Y-%m-%d')
+        
+        # Carregar delays salvos
+        try:
+            with open(DELAY_FILE, 'r') as f:
+                delays = json.load(f)
+        except:
+            delays = {}
+        
+        # Se não é do dia de hoje, limpar e gerar novos
+        if delays.get('data') != hoje:
+            delays = {
+                'data': hoje,
+                'entrada_manha': random.randint(0, VARIACAO_ENTRADA),
+                'saida_almoco': random.randint(0, VARIACAO_SAIDA_ALMOCO),
+                'retorno_almoco': random.randint(0, VARIACAO_RETORNO),
+                'saida_tarde': random.randint(0, VARIACAO_SAIDA)
+            }
+            with open(DELAY_FILE, 'w') as f:
+                json.dump(delays, f, indent=2)
+            logging.info(f"🎲 Delays gerados para hoje: entrada +{delays['entrada_manha']}min, " +
+                        f"saída almoço +{delays['saida_almoco']}min, " +
+                        f"retorno +{delays['retorno_almoco']}min, " +
+                        f"saída +{delays['saida_tarde']}min")
+        
+        return delays.get(tipo_ponto, 0)
 
     def chrome_driver(headless=True):
         chrome_options = Options()
@@ -134,10 +179,7 @@ def main():
             return []
 
     def calcular_horario_saida(pontos_registrados):
-        """
-        Calcula o horário de saída para completar 8 horas
-        Retorna: (horario_saida, info_calculo)
-        """
+        """Calcula o horário de saída para completar a carga horária"""
         try:
             agora = datetime.datetime.now()
             
@@ -149,88 +191,101 @@ def main():
             saida_almoco_hoje = datetime.datetime.combine(agora.date(), saida_almoco.time())
             retorno_almoco_hoje = datetime.datetime.combine(agora.date(), retorno_almoco.time())
             
-            # Horas trabalhadas na manhã
             horas_manha = (saida_almoco_hoje - entrada_hoje).total_seconds() / 3600
-            
-            # Horas que faltam para completar 8h
             horas_faltam_tarde = CARGA_HORARIA_DIARIA - horas_manha
-            
-            # Horário de saída = retorno + horas que faltam
             horario_saida = retorno_almoco_hoje + datetime.timedelta(hours=horas_faltam_tarde)
             
-            info = {
-                'entrada': pontos_registrados[0],
-                'saida_almoco': pontos_registrados[1],
-                'retorno_almoco': pontos_registrados[2],
-                'horas_manha': horas_manha,
-                'horas_faltam_tarde': horas_faltam_tarde,
-                'horario_saida': horario_saida.strftime('%H:%M')
-            }
+            # Adicionar variação aleatória do dia
+            delay_saida = obter_delay_do_dia('saida_tarde')
+            horario_saida_com_variacao = horario_saida + datetime.timedelta(minutes=delay_saida)
             
             logging.info(f"=== CÁLCULO DE SAÍDA ===")
-            logging.info(f"Entrada: {info['entrada']}")
-            logging.info(f"Saída almoço: {info['saida_almoco']}")
-            logging.info(f"Retorno almoço: {info['retorno_almoco']}")
+            logging.info(f"Entrada: {pontos_registrados[0]}")
+            logging.info(f"Saída almoço: {pontos_registrados[1]}")
+            logging.info(f"Retorno almoço: {pontos_registrados[2]}")
             logging.info(f"Horas manhã: {horas_manha:.2f}h")
             logging.info(f"Horas faltam (tarde): {horas_faltam_tarde:.2f}h")
-            logging.info(f">>> Saída calculada: {info['horario_saida']}")
+            logging.info(f"Saída base: {horario_saida.strftime('%H:%M')}")
+            logging.info(f"🎲 Variação: +{delay_saida} min")
+            logging.info(f">>> Saída final: {horario_saida_com_variacao.strftime('%H:%M')}")
             logging.info(f"========================")
             
-            return horario_saida, info
+            return horario_saida_com_variacao, {'horas_manha': horas_manha, 'delay': delay_saida}
             
         except Exception as e:
             logging.error(f"Erro ao calcular horário de saída: {e}")
-            # Fallback: 18:00
             return datetime.datetime.combine(datetime.date.today(), datetime.time(18, 0)), None
 
     def determinar_ponto_necessario(hora_atual, pontos_registrados):
-        """LÓGICA INTELIGENTE - compensa atraso na saída"""
+        """LÓGICA INTELIGENTE com variação aleatória"""
         agora = datetime.datetime.now()
         hora = int(hora_atual.split(':')[0])
+        minuto = int(hora_atual.split(':')[1])
         qtd_pontos = len(pontos_registrados)
         
         logging.info(f"Análise: {hora_atual}, {qtd_pontos} ponto(s)")
         
         # ENTRADA (08:00 - 11:59): Se não tem nenhum ponto
         if 8 <= hora <= 11 and qtd_pontos == 0:
-            return True, "entrada_manha"
+            delay = obter_delay_do_dia('entrada_manha')
+            # Verificar se já passou do horário base + delay
+            horario_bater = datetime.datetime.combine(agora.date(), datetime.time(9, 0)) + datetime.timedelta(minutes=delay)
+            if agora >= horario_bater:
+                logging.info(f"🎲 Entrada com variação: +{delay} min (horário: {horario_bater.strftime('%H:%M')})")
+                return True, "entrada_manha"
+            else:
+                minutos_faltam = (horario_bater - agora).total_seconds() / 60
+                logging.info(f"⏳ Aguardando variação da entrada... Faltam {minutos_faltam:.0f} min para {horario_bater.strftime('%H:%M')}")
+                return False, None
         
         # SAÍDA ALMOÇO (12:00 - 12:59): Se tem 1 ponto
         if hora == 12 and qtd_pontos == 1:
-            return True, "saida_almoco"
+            delay = obter_delay_do_dia('saida_almoco')
+            horario_bater = datetime.datetime.combine(agora.date(), datetime.time(12, 0)) + datetime.timedelta(minutes=delay)
+            if agora >= horario_bater:
+                logging.info(f"🎲 Saída almoço com variação: +{delay} min (horário: {horario_bater.strftime('%H:%M')})")
+                return True, "saida_almoco"
+            else:
+                minutos_faltam = (horario_bater - agora).total_seconds() / 60
+                logging.info(f"⏳ Aguardando variação da saída almoço... Faltam {minutos_faltam:.0f} min para {horario_bater.strftime('%H:%M')}")
+                return False, None
         
-        # RETORNO ALMOÇO: Se tem 2 pontos, verificar se passou tempo de almoço
+        # RETORNO ALMOÇO: Se tem 2 pontos
         if qtd_pontos == 2:
             try:
                 saida_almoco_str = pontos_registrados[1]
                 saida_almoco = datetime.datetime.strptime(saida_almoco_str, '%H:%M')
                 saida_almoco_hoje = datetime.datetime.combine(agora.date(), saida_almoco.time())
                 
+                # Tempo de almoço + variação
+                delay = obter_delay_do_dia('retorno_almoco')
+                tempo_almoco_total = TEMPO_ALMOCO_MINUTOS + delay
+                
                 tempo_almoco = (agora - saida_almoco_hoje).total_seconds() / 60
                 
-                logging.info(f"Saída almoço: {saida_almoco_str} | Tempo de almoço: {tempo_almoco:.0f} min")
+                logging.info(f"Saída almoço: {saida_almoco_str} | Tempo de almoço: {tempo_almoco:.0f} min | 🎲 Almoço total: {tempo_almoco_total} min")
                 
-                if tempo_almoco >= TEMPO_ALMOCO_MINUTOS:
+                if tempo_almoco >= tempo_almoco_total:
+                    logging.info(f"🎲 Retorno com variação: +{delay} min de almoço extra")
                     return True, "retorno_almoco"
                 else:
-                    minutos_restantes = TEMPO_ALMOCO_MINUTOS - tempo_almoco
-                    logging.info(f"Aguardando almoço... Faltam {minutos_restantes:.0f} min")
+                    minutos_restantes = tempo_almoco_total - tempo_almoco
+                    logging.info(f"⏳ Aguardando almoço... Faltam {minutos_restantes:.0f} min")
                     return False, None
             except Exception as e:
                 logging.warning(f"Erro ao calcular tempo de almoço: {e}")
                 if 13 <= hora <= 17:
                     return True, "retorno_almoco"
         
-        # SAÍDA: Se tem 3 pontos, calcular horário correto para completar 8h
+        # SAÍDA: Se tem 3 pontos
         if qtd_pontos == 3:
             horario_saida, info = calcular_horario_saida(pontos_registrados)
             
-            # Verificar se já chegou ou passou o horário de saída
             if agora >= horario_saida:
                 return True, "saida_tarde"
             else:
                 minutos_faltam = (horario_saida - agora).total_seconds() / 60
-                logging.info(f"Aguardando horário de saída... Faltam {minutos_faltam:.0f} min para {horario_saida.strftime('%H:%M')}")
+                logging.info(f"⏳ Aguardando saída... Faltam {minutos_faltam:.0f} min para {horario_saida.strftime('%H:%M')}")
                 return False, None
         
         # Casos de atraso
@@ -391,6 +446,7 @@ def main():
         logging.info(f"Tempo de almoço: {TEMPO_ALMOCO_MINUTOS} min")
         logging.info(f"Carga horária: {CARGA_HORARIA_DIARIA}h")
         logging.info("Compensação: NA SAÍDA")
+        logging.info(f"🎲 Variações: entrada ±{VARIACAO_ENTRADA}min, saída almoço ±{VARIACAO_SAIDA_ALMOCO}min, retorno ±{VARIACAO_RETORNO}min, saída ±{VARIACAO_SAIDA}min")
         logging.info("========================")
         
         verificar_e_bater_ponto()
@@ -431,20 +487,27 @@ def main():
                 print(f"Bater agora: {'SIM' if deve_bater else 'NÃO'}")
                 print(f"Próximo: {tipo_ponto if tipo_ponto else 'Aguardando...'}")
                 
-                # Mostrar previsões
+                # Mostrar delays do dia
+                print(f"\n🎲 Variações de hoje:")
+                print(f"   Entrada: +{obter_delay_do_dia('entrada_manha')} min")
+                print(f"   Saída almoço: +{obter_delay_do_dia('saida_almoco')} min")
+                print(f"   Retorno: +{obter_delay_do_dia('retorno_almoco')} min")
+                print(f"   Saída: +{obter_delay_do_dia('saida_tarde')} min")
+                
                 if len(pontos) == 2:
                     try:
                         agora = datetime.datetime.now()
                         saida_almoco = datetime.datetime.strptime(pontos[1], '%H:%M')
                         saida_almoco_hoje = datetime.datetime.combine(agora.date(), saida_almoco.time())
-                        retorno_previsto = saida_almoco_hoje + datetime.timedelta(minutes=TEMPO_ALMOCO_MINUTOS)
-                        print(f"Retorno previsto: {retorno_previsto.strftime('%H:%M')}")
+                        delay_retorno = obter_delay_do_dia('retorno_almoco')
+                        retorno_previsto = saida_almoco_hoje + datetime.timedelta(minutes=TEMPO_ALMOCO_MINUTOS + delay_retorno)
+                        print(f"\nRetorno previsto: {retorno_previsto.strftime('%H:%M')} (almoço + {delay_retorno}min variação)")
                     except:
                         pass
                 
                 if len(pontos) == 3:
                     horario_saida, info = calcular_horario_saida(pontos)
-                    print(f"Saída prevista: {horario_saida.strftime('%H:%M')} (para completar {CARGA_HORARIA_DIARIA}h)")
+                    print(f"\nSaída prevista: {horario_saida.strftime('%H:%M')} (para completar {CARGA_HORARIA_DIARIA}h)")
                 
                 driver.quit()
             except Exception as e:

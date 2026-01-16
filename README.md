@@ -6,12 +6,26 @@ Script Python para registro automático de ponto no sistema [Central do Funcion�
 
 - ✅ Registro automático dos 4 pontos diários
 - ✅ **Compensação inteligente de horas** - calcula a saída para completar 8h
+- ✅ **Variação aleatória nos horários** - simula comportamento humano 🎲
 - ✅ Respeita 1 hora de almoço (configurável)
 - ✅ Verificação a cada 5 minutos
 - ✅ Ignora feriados e fins de semana
 - ✅ Logs detalhados de todas as operações
 - ✅ Geolocalização configurável
 - ✅ **Inicia automaticamente com o Windows** (roda em background)
+
+## 🎲 Variação Aleatória
+
+Para parecer mais natural, o sistema adiciona uma variação aleatória em cada ponto:
+
+| Ponto | Variação | Exemplo |
+|-------|----------|---------|
+| Entrada | +0 a 10 min | 09:00 → 09:07 |
+| Saída almoço | +0 a 5 min | 12:00 → 12:03 |
+| Retorno | +0 a 10 min | 13:00 → 13:08 |
+| Saída | +0 a 10 min | 18:20 → 18:26 |
+
+> 💡 Os valores são sorteados **uma vez por dia** e permanecem fixos até o dia seguinte.
 
 ## 🧠 Lógica Inteligente de Compensação
 
@@ -25,14 +39,16 @@ O script calcula automaticamente os horários baseado na sua jornada:
 
 ### Exemplo de cálculo:
 ```
-Entrada: 09:20
-Saída almoço: 12:00
-Horas manhã: 2h40min
+Entrada: 09:07 (com variação +7min)
+Saída almoço: 12:03
+Horas manhã: 2h56min
 
-Retorno almoço: 13:00
-Horas que faltam: 8h - 2h40min = 5h20min
+Retorno almoço: 13:08 (almoço de 1h05)
+Horas que faltam: 8h - 2h56min = 5h04min
 
->>> Saída calculada: 13:00 + 5h20min = 18:20
+Saída base: 13:08 + 5h04min = 18:12
+Variação: +4min
+>>> Saída final: 18:16
 ```
 
 ---
@@ -107,13 +123,24 @@ nano .env
 
 Preencha suas informações:
 ```env
+# Credenciais
 USUARIO=SEU_NUMERO_FOLHA
 SENHA=SUA_SENHA
 URL_BASE=https://centraldofuncionario.com.br/CODIGO_EMPRESA
+
+# Localização
 LATITUDE=-5.5292
 LONGITUDE=-47.4916
+
+# Configurações de tempo
 TEMPO_ALMOCO_MINUTOS=60
 CARGA_HORARIA_DIARIA=8
+
+# Variação aleatória (minutos)
+VARIACAO_ENTRADA=10
+VARIACAO_SAIDA_ALMOCO=5
+VARIACAO_RETORNO=10
+VARIACAO_SAIDA=10
 ```
 
 > 💡 **Dica:** Use o Google Maps para encontrar as coordenadas. Clique com botão direito no local e copie.
@@ -139,7 +166,20 @@ source venv/bin/activate
 python ponto.py verificar
 ```
 
-Se funcionar, deve mostrar seus pontos do dia.
+Se funcionar, deve mostrar seus pontos e as variações do dia:
+```
+=== VERIFICAÇÃO ===
+Data: 16/01/2026
+Hora: 10:30
+Pontos: ['09:07']
+Qtd: 1
+
+🎲 Variações de hoje:
+   Entrada: +7 min
+   Saída almoço: +3 min
+   Retorno: +8 min
+   Saída: +4 min
+```
 
 ---
 
@@ -204,7 +244,7 @@ Deve mostrar `Running` automaticamente! 🎉
 
 ## 🎮 Uso
 
-### Verificar pontos (sem registrar)
+### Verificar pontos e variações do dia
 ```bash
 cd ~/ponto && source venv/bin/activate
 python ponto.py verificar
@@ -244,10 +284,20 @@ pkill -f ponto.py
 
 | Horário | Pontos | Ação |
 |---------|--------|------|
-| 08:00 - 11:59 | 0 | Registra entrada |
-| 12:00 - 12:59 | 1 | Registra saída almoço |
-| Após 1h do almoço | 2 | Registra retorno |
-| Horário calculado | 3 | Registra saída (completa 8h) |
+| 08:00 - 11:59 | 0 | Registra entrada (+ variação) |
+| 12:00 - 12:59 | 1 | Registra saída almoço (+ variação) |
+| Após almoço + variação | 2 | Registra retorno |
+| Horário calculado + variação | 3 | Registra saída |
+
+### Variações aleatórias
+
+Você pode ajustar as variações no arquivo `.env`:
+```env
+VARIACAO_ENTRADA=10      # 0 a 10 minutos após 09:00
+VARIACAO_SAIDA_ALMOCO=5  # 0 a 5 minutos após 12:00
+VARIACAO_RETORNO=10      # 0 a 10 minutos extras de almoço
+VARIACAO_SAIDA=10        # 0 a 10 minutos após horário calculado
+```
 
 ### Feriados
 
@@ -271,7 +321,30 @@ feriados = [
 ├── .env.example          # Template de configuração
 ├── .gitignore            # Arquivos ignorados pelo Git
 ├── venv/                 # Ambiente virtual Python
-└── ponto_automatico.log  # Logs do sistema
+├── ponto_automatico.log  # Logs do sistema
+├── registros_ponto.json  # Histórico de registros
+└── delay_hoje.json       # Variações sorteadas do dia
+```
+
+---
+
+## 📊 Exemplo de Log
+```
+2026-01-16 09:00:00 - INFO - 🎲 Delays gerados para hoje: entrada +7min, saída almoço +3min, retorno +8min, saída +4min
+2026-01-16 09:07:15 - INFO - 🎲 Entrada com variação: +7 min (horário: 09:07)
+2026-01-16 09:07:32 - INFO - ✓ entrada_manha OK!
+...
+2026-01-16 12:03:45 - INFO - 🎲 Saída almoço com variação: +3 min (horário: 12:03)
+2026-01-16 12:04:02 - INFO - ✓ saida_almoco OK!
+...
+2026-01-16 13:11:30 - INFO - 🎲 Retorno com variação: +8 min de almoço extra
+2026-01-16 13:11:48 - INFO - ✓ retorno_almoco OK!
+...
+2026-01-16 18:16:05 - INFO - === CÁLCULO DE SAÍDA ===
+2026-01-16 18:16:05 - INFO - Saída base: 18:12
+2026-01-16 18:16:05 - INFO - 🎲 Variação: +4 min
+2026-01-16 18:16:05 - INFO - >>> Saída final: 18:16
+2026-01-16 18:16:32 - INFO - ✓ saida_tarde OK!
 ```
 
 ---
@@ -302,6 +375,11 @@ rm -rf ~/.wdm
 tail -100 ~/ponto/ponto_automatico.log
 ```
 
+### Resetar variações do dia
+```bash
+rm ~/ponto/delay_hoje.json
+```
+
 ---
 
 ## 📦 Bibliotecas Python
@@ -315,6 +393,23 @@ pip install selenium schedule webdriver-manager python-dotenv
 | schedule | Agendamento de tarefas |
 | webdriver-manager | Gerencia ChromeDriver |
 | python-dotenv | Carrega variáveis do .env |
+
+---
+
+## 🔄 Atualizações
+
+### v3.0 - Variação Aleatória
+- ✅ Variação aleatória nos horários (simula comportamento humano)
+- ✅ Configuração de variações via .env
+- ✅ Delays fixos por dia (sorteados uma vez)
+
+### v2.0 - Compensação de Horas
+- ✅ Cálculo inteligente do horário de saída
+- ✅ Compensação automática de atrasos
+
+### v1.0 - Versão Inicial
+- ✅ Registro automático dos 4 pontos
+- ✅ Respeita 1 hora de almoço
 
 ---
 
